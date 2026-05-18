@@ -1,0 +1,10 @@
+strategy,parameter,value,sharpe,max_dd_pct,wf_positive_count
+V4 lead-lag (anti-vol),target_vol_ann,0.2,4.5604088922214965,-18.83852899204158,5
+V4 lead-lag (anti-vol),target_vol_ann,0.3,4.570694167404834,-27.125226759169884,5
+V4 lead-lag (anti-vol),target_vol_ann,0.4,4.542945749737535,-32.912245209615044,5
+V4 lead-lag (anti-vol),lev_cap,1.5,4.542945749737536,-25.747425665256053,5
+V4 lead-lag (anti-vol),lev_cap,2.0,4.570694167404834,-27.125226759169884,5
+V4 lead-lag (anti-vol),lev_cap,3.0,4.5604088922214965,-27.125226759169852,5
+V4 lead-lag (anti-vol),ref_window,10.0,4.533061191886701,-27.024193319665567,5
+V4 lead-lag (anti-vol),ref_window,20.0,4.570694167404834,-27.125226759169884,5
+V4 lead-lag (anti-vol),ref_window,40.0,4.5899801401792235,-23.767551596393975,5

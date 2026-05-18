@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 
 from task2_interpolation import (
     load_clean, gap_bounds, univariate_bridge, bivariate_bridge,
-    ASSETS, PEERS, USE_GARCH, PIC,
+    ASSETS, PEERS, PEER_LAGS, USE_GARCH, PIC,
 )
 
 ROOT = Path(__file__).parent
@@ -50,10 +50,11 @@ def build_price_panel():
         logp = log_df[a].to_numpy().copy()
         t_L, t_R = gaps[a]
         peer = PEERS.get(a)
+        peer_lag = PEER_LAGS.get(a, 0)
         use_garch = a in USE_GARCH
         if peer is not None:
             mu, _ = bivariate_bridge(logp, log_df[peer].to_numpy(),
-                                     t_L, t_R, use_garch=use_garch)
+                                     t_L, t_R, use_garch=use_garch, lag=peer_lag)
         else:
             mu, _ = univariate_bridge(logp, t_L, t_R, use_garch=use_garch)
         logp[t_L + 1:t_R] = mu

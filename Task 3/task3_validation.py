@@ -24,7 +24,7 @@ from arch import arch_model
 
 from task2_interpolation import (
     load_clean, gap_bounds, univariate_bridge, bivariate_bridge,
-    ASSETS, PEERS, USE_GARCH, Z95, PIC,
+    ASSETS, PEERS, PEER_LAGS, USE_GARCH, Z95, PIC,
 )
 from task3_extrapolation import build_full_logp
 

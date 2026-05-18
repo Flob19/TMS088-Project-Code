@@ -1,0 +1,7 @@
+asset,method,n_folds,rmse_pct,rmse_calm,rmse_turb,coverage95,cov_lo,cov_hi,crps
+sugar,biv_slings_lag1_const,64,3.4310,2.7021,3.9690,97.2188,96.5899,97.7343,0.018340
+sugar,biv_slings_lag1_garch,64,3.4234,2.6598,3.9822,97.1250,96.4871,97.6499,0.018115
+tranquillity,biv_tranq_const,70,3.4912,2.9329,3.9752,95.3429,94.5937,95.9926,0.018642
+tranquillity,biv_tranq_garch,70,3.4725,2.9310,3.9436,95.9143,95.2065,96.5213,0.018438
+stocks,biv_stocks_const,65,4.4198,4.5821,4.2463,95.8462,95.1043,96.4797,0.023817
+stocks,biv_stocks_garch,65,4.4208,4.5779,4.2531,96.4308,95.7362,97.0158,0.023829

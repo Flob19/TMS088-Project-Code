@@ -60,20 +60,21 @@ def V3_full_longshort(prices):
     cash_w = 1.0 - w_sugar.abs()
     return (port_r + cash_w * RF_DAILY).dropna()
 
-def V4_pro_vol_LS(prices, ref_window=20, target_vol_ann=0.30, lev_cap=2.0):
-    """100% pro-vol long/short, 20-day window.
+def V4_anti_vol_LS(prices, ref_window=20, target_vol_ann=0.24, lev_cap=2.0):
+    """100% anti-vol long/short, 20-day window.
 
-    Pro-vol sizing: scale exposure by recent_sigma / long_run_sigma so the
-    position is LARGER when vol is in a high-vol regime (volatility clustering
-    -> bigger expected return magnitude per the same directional signal).
+    Anti-vol sizing: scale exposure by target / sigma_recent so the
+    position is SMALLER when vol is in a high-vol regime (classical
+    risk-targeting: reduce exposure precisely when tail risk is highest;
+    motivated by sugar's heavy tails and volatility clustering in Task 1).
 
-    w_sugar = sign(signal) * (sigma_recent / target), capped at +/- lev_cap.
+    w_sugar = sign(signal) * min(target / sigma_recent, lev_cap).
     On signal == 0 -> cash.
     """
     r = np.log(prices).diff()
     sig = 0.5 * (r["guitars"].shift(1) + r["slingshots"].shift(1))
     sigma_rec = r["sugar"].rolling(ref_window).std() * np.sqrt(DPY)
-    scale = (sigma_rec / target_vol_ann).clip(upper=lev_cap).shift(1)
+    scale = (target_vol_ann / sigma_rec).clip(upper=lev_cap).shift(1)
     sign = np.where(sig > 0, 1.0, np.where(sig < 0, -1.0, 0.0))
     sign = pd.Series(sign, index=sig.index)
     w_sugar = sign * scale
@@ -81,6 +82,11 @@ def V4_pro_vol_LS(prices, ref_window=20, target_vol_ann=0.30, lev_cap=2.0):
     # Cash leg: 1 - |w_sugar|; can be negative (borrow at RF)
     cash_w = 1.0 - w_sugar.abs()
     return (port_r + cash_w * RF_DAILY).dropna()
+
+
+# Backwards-compat alias so any external caller still using the old name
+# (e.g. sensitivity-grid scripts) keeps working without modification.
+V4_pro_vol_LS = V4_anti_vol_LS
 
 
 def report(name, r):

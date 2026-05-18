@@ -29,7 +29,7 @@ from arch import arch_model
 
 from task2_interpolation import (
     load_clean, gap_bounds, univariate_bridge, bivariate_bridge,
-    ASSETS, PEERS, USE_GARCH, Z95, PIC,
+    ASSETS, PEERS, PEER_LAGS, USE_GARCH, Z95, PIC,
 )
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.api import VAR
@@ -51,10 +51,12 @@ def build_full_logp(df, log_df, gaps):
         logp = log_df[a].to_numpy().copy()
         t_L, t_R = gaps[a]
         peer = PEERS.get(a)
+        peer_lag = PEER_LAGS.get(a, 0)
         use_garch = a in USE_GARCH
         if peer is not None:
             peer_logp = log_df[peer].to_numpy()
-            mu, _ = bivariate_bridge(logp, peer_logp, t_L, t_R, use_garch=use_garch)
+            mu, _ = bivariate_bridge(logp, peer_logp, t_L, t_R,
+                                     use_garch=use_garch, lag=peer_lag)
         else:
             mu, _ = univariate_bridge(logp, t_L, t_R, use_garch=use_garch)
         logp[t_L + 1:t_R] = mu
@@ -82,20 +84,25 @@ def fit_garch_and_forecast_variance(returns, horizon):
 def arima_forecast(logp_observed, horizon=HORIZON, order=(1, 1, 1)):
     """ARIMA(p,1,q) on log-prices; returns mean path + cumulative sd."""
     y = logp_observed[~np.isnan(logp_observed)]
+    # RW fallback (used when ARIMA fails or diverges)
+    r = np.diff(y)
+    mu_rw = r.mean(); sig2_rw = np.var(r, ddof=1)
+    h = np.arange(1, horizon + 1)
+    rw_mean = y[-1] + h * mu_rw
+    rw_var = h * sig2_rw
     try:
         res = ARIMA(y, order=order, enforce_stationarity=False,
                     enforce_invertibility=False).fit(method_kwargs={"warn_convergence": False})
         fc = res.get_forecast(steps=horizon)
-        mean = fc.predicted_mean
-        sd = np.sqrt(fc.var_pred_mean)
-        return np.asarray(mean), np.asarray(sd) ** 2  # return cumulative variance
+        mean = np.asarray(fc.predicted_mean)
+        cum_var = np.asarray(fc.var_pred_mean)
+        # Sanity: if forecast diverges beyond 10× RW range, fall back
+        if np.any(np.abs(mean - y[-1]) > 10 * np.abs(rw_mean[-1] - y[-1]) + 1):
+            return rw_mean, rw_var
+        return mean, cum_var
     except Exception as exc:
         print(f"  ARIMA failed: {exc}")
-        # fallback: RW with drift
-        r = np.diff(y)
-        mu = r.mean(); sig2 = np.var(r, ddof=1)
-        h = np.arange(1, horizon + 1)
-        return y[-1] + h * mu, h * sig2
+        return rw_mean, rw_var
 
 
 def var_forecast_pair(logp_target, logp_peer, horizon=HORIZON):
@@ -250,7 +257,7 @@ def main():
     # ----- benchmark vs ARIMA / VAR at a few origins -----
     print("\nBenchmark: RW+drift vs ARIMA(1,1,1) vs VAR(1) on peer pair "
           "(RMSE on log-price, horizons 50 / 100 / 200)")
-    bench_origins = [2500, 3500, 4500]
+    bench_origins = list(range(1200, 5001, 200))  # 20 origins, spaced 200d
     bench_rows = []
     peer_map = {"gurkor": "water", "water": "gurkor",
                 "slingshots": "guitars", "guitars": "slingshots"}

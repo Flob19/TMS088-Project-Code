@@ -26,14 +26,18 @@ PIC.mkdir(exist_ok=True)
 RNG = np.random.default_rng(20260414)
 
 ASSETS = ["gurkor", "guitars", "slingshots", "stocks", "sugar", "water", "tranquillity"]
-PEERS = {  # strong pairs first, sugar->guitars added after peer-bridge
-           # robustness check showed 9.4% RMSE reduction despite rho=0.21
+PEERS = {  # strong pairs first; sugar's peer was changed from "guitars" (same-day)
+           # to "slingshots" at lag=1 after the ablation showed lower synthetic-gap
+           # RMSE (3.43% vs 3.80%).  See PEER_LAGS below for the lag in days.
     "gurkor": "water",
     "water": "gurkor",
     "slingshots": "guitars",
     "guitars": "slingshots",
-    "sugar": "guitars",
+    "sugar": "slingshots",   # changed from "guitars" -- now lag=1, see PEER_LAGS
 }
+# Lag in days for the peer regression (0 = contemporaneous, default).
+# When lag=k, the in-sample regression is r_target_t ~ alpha + beta r_peer_{t-k}.
+PEER_LAGS = {"sugar": 1}
 USE_GARCH = {"slingshots", "guitars", "sugar", "tranquillity"}
 M_GAP = 50         # gap length
 K_FOLDS = 200      # synthetic gap folds
@@ -102,7 +106,9 @@ def fit_sigma2_window(returns, t_center, w=250):
     lo = max(0, t_center - w)
     seg = returns[lo:t_center]
     seg = seg[~np.isnan(seg)]
-    return np.var(seg, ddof=1) if len(seg) > 30 else np.nanvar(returns)
+    if len(seg) > 1:
+        return np.var(seg, ddof=1)
+    return np.nanvar(returns) if np.any(~np.isnan(returns)) else 1e-8
 
 
 def fit_sigma2_garch_path(residuals, m, t_center):
@@ -139,43 +145,86 @@ def univariate_bridge(logp, t_L, t_R, use_garch=False):
     return mean, var
 
 
-def bivariate_bridge(logp_t, logp_p, t_L, t_R, use_garch=False):
+def bivariate_bridge(logp_t, logp_p, t_L, t_R, use_garch=False, lag=0):
     """
     Peer-conditioned bridge.  Fit beta on observed days outside the target gap;
     bridge the residual log-return process.
+
+    Parameters
+    ----------
+    lag : int, default 0
+        0 (default) -- contemporaneous formulation: r_target_t = alpha + beta r_peer_t + eps_t.
+        1           -- one-day-lagged formulation:   r_target_t = alpha + beta r_peer_{t-1} + eps_t.
+                       Used for sugar (see PEER_LAGS).
     """
     m = t_R - t_L - 1
     r_t = np.diff(logp_t)
     r_p = np.diff(logp_p)
-    # mask: both observed AND outside the gap
-    mask = ~np.isnan(r_t) & ~np.isnan(r_p)
-    mask[t_L:t_R] = False
-    rt, rp = r_t[mask], r_p[mask]
-    beta, alpha = np.polyfit(rp, rt, 1)
-    eps = rt - (alpha + beta * rp)
-    sig2_eps = float(np.var(eps, ddof=2))
-    # peer must be observed inside the gap (it is: each asset's gap is in a
-    # different position).  Use observed peer log-prices as covariate.
-    peer_segment = logp_p[t_L:t_R + 1]
-    if np.any(np.isnan(peer_segment)):
-        # fall back: cannot use peer, do univariate
-        return univariate_bridge(logp_t, t_L, t_R, use_garch=use_garch)
-    peer_increment = peer_segment - peer_segment[0]   # length m+2, peer_increment[0]=0
-    # deterministic shift contribution at each interior step k=1..m
-    shift_k = beta * peer_increment[1:m + 1]
-    R_t = logp_t[t_R] - logp_t[t_L]
-    R_p = logp_p[t_R] - logp_p[t_L]
-    # bridge the residual cumulative sum from 0 to (R_t - beta*R_p) over m+1 steps
-    if use_garch:
-        # build GARCH path on eps with current pre-gap data
-        eps_full = np.full_like(r_t, np.nan)
-        eps_full[mask] = eps
-        sig2_path = fit_sigma2_garch_path(eps_full, m + 1, t_L)
-    else:
-        sig2_path = np.full(m + 1, sig2_eps)
-    bridge_resid_mean, bridge_var = bridge_mean_var(0.0, R_t - beta * R_p, m, sig2_path)
-    mean = logp_t[t_L] + shift_k + bridge_resid_mean
-    return mean, bridge_var
+
+    if lag == 0:
+        # ---------- contemporaneous (original) ----------
+        mask = ~np.isnan(r_t) & ~np.isnan(r_p)
+        mask[t_L:t_R] = False
+        rt, rp = r_t[mask], r_p[mask]
+        beta, alpha = np.polyfit(rp, rt, 1)
+        eps = rt - (alpha + beta * rp)
+        sig2_eps = float(np.var(eps, ddof=2))
+        # peer must be observed inside the gap.
+        peer_segment = logp_p[t_L:t_R + 1]
+        if np.any(np.isnan(peer_segment)):
+            return univariate_bridge(logp_t, t_L, t_R, use_garch=use_garch)
+        peer_increment = peer_segment - peer_segment[0]   # length m+2
+        shift_k = beta * peer_increment[1:m + 1]
+        R_t = logp_t[t_R] - logp_t[t_L]
+        R_p = logp_p[t_R] - logp_p[t_L]
+        if use_garch:
+            eps_full = np.full_like(r_t, np.nan)
+            eps_full[mask] = eps
+            sig2_path = fit_sigma2_garch_path(eps_full, m + 1, t_L)
+        else:
+            sig2_path = np.full(m + 1, sig2_eps)
+        bridge_resid_mean, bridge_var = bridge_mean_var(0.0, R_t - beta * R_p, m, sig2_path)
+        mean = logp_t[t_L] + shift_k + bridge_resid_mean
+        return mean, bridge_var
+
+    if lag == 1:
+        # ---------- one-day-lagged peer regression ----------
+        # r_p_lag1[i] = r_p[i-1]; aligns with r_t[i] (both refer to day i+1).
+        r_p_lag1 = np.concatenate([[np.nan], r_p[:-1]])
+        mask = ~np.isnan(r_t) & ~np.isnan(r_p_lag1)
+        mask[t_L:t_R] = False     # drop returns whose target day falls in the gap
+        rt, rpl = r_t[mask], r_p_lag1[mask]
+        A = np.column_stack([np.ones_like(rpl), rpl])
+        coef, *_ = np.linalg.lstsq(A, rt, rcond=None)
+        alpha, beta = float(coef[0]), float(coef[1])
+        eps = rt - (alpha + beta * rpl)
+        sig2_eps = float(np.var(eps, ddof=2))
+        # peer must be observed on r_p indices t_L-1 .. t_R-2 (we need r_p at
+        # those indices for j = 1..m+1, since r_p index for step j is t_L+j-2).
+        needed_lo, needed_hi = t_L - 1, t_R - 2     # inclusive r_p indices (length m+1)
+        if needed_lo < 0 or needed_hi >= len(r_p) or np.any(np.isnan(r_p[needed_lo:needed_hi + 1])):
+            return univariate_bridge(logp_t, t_L, t_R, use_garch=use_garch)
+        # mu_j = alpha + beta * r_peer_{j-1}  for j = 1..m+1   (length m+1)
+        mu_j = alpha + beta * r_p[needed_lo:needed_hi + 1]
+        sum_all = float(mu_j.sum())
+        xL, xR = logp_t[t_L], logp_t[t_R]
+        k_arr = np.arange(1, m + 1)
+        cum_mu_k = np.cumsum(mu_j)[:m]
+        mean = xL + cum_mu_k + (k_arr / (m + 1)) * (xR - xL - sum_all)
+        # variance: time-changed Brownian-bridge on residuals
+        if use_garch:
+            eps_full = np.full_like(r_t, np.nan)
+            eps_full[mask] = eps
+            sig2_path = fit_sigma2_garch_path(eps_full, m + 1, t_L)
+        else:
+            sig2_path = np.full(m + 1, sig2_eps)
+        S = np.cumsum(sig2_path)
+        Stot = S[-1]
+        Sk = S[k_arr - 1]
+        var = Sk * (Stot - Sk) / Stot
+        return mean, var
+
+    raise ValueError(f"bivariate_bridge: unsupported lag={lag} (only 0 or 1)")
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +289,7 @@ def wilson_ci(successes, n, z=Z95):
     return (centre - half, centre + half)
 
 
-def synthetic_validate(logp_t, logp_p_full, asset, peer):
+def synthetic_validate(logp_t, logp_p_full, asset, peer, peer_lag=0):
     """Return dict of metrics for linear / univariate / (bivariate) / biv-t on K folds.
 
     Gaps are sampled without overlap (separation >= M_GAP+1) so that the
@@ -308,7 +357,7 @@ def synthetic_validate(logp_t, logp_p_full, asset, peer):
             if not np.any(np.isnan(peer_seg)):
                 for mname, use_g in (("biv_const", False), ("biv_garch", True)):
                     mu_b, var_b = bivariate_bridge(work, logp_p_full, t_L, t_R,
-                                                   use_garch=use_g)
+                                                   use_garch=use_g, lag=peer_lag)
                     sd_b = np.sqrt(var_b)
                     err2 = (mu_b - true) ** 2
                     metrics[mname]["err2"].extend(err2)
@@ -392,8 +441,10 @@ def main():
     rows = []
     for a in ASSETS:
         peer = PEERS.get(a)
+        peer_lag = PEER_LAGS.get(a, 0)
         peer_logp = log_df[peer].to_numpy() if peer else None
-        m, n_folds = synthetic_validate(log_df[a].to_numpy(), peer_logp, a, peer)
+        m, n_folds = synthetic_validate(log_df[a].to_numpy(), peer_logp, a, peer,
+                                        peer_lag=peer_lag)
         for method, vals in m.items():
             rows.append({
                 "asset": a, "method": method, "n_folds": n_folds,
@@ -428,11 +479,14 @@ def main():
         t_L, t_R = gaps[a]
         logp = log_df[a].to_numpy()
         peer = PEERS.get(a)
+        peer_lag = PEER_LAGS.get(a, 0)
         use_garch_local = a in USE_GARCH
         if peer is not None:
             peer_logp = log_df[peer].to_numpy()
-            mu, var = bivariate_bridge(logp, peer_logp, t_L, t_R, use_garch=use_garch_local)
-            method = f"bivariate ({peer})" + (" + GARCH" if use_garch_local else "")
+            mu, var = bivariate_bridge(logp, peer_logp, t_L, t_R,
+                                       use_garch=use_garch_local, lag=peer_lag)
+            lag_tag = f" lag-{peer_lag}" if peer_lag else ""
+            method = f"bivariate ({peer}){lag_tag}" + (" + GARCH" if use_garch_local else "")
         else:
             mu, var = univariate_bridge(logp, t_L, t_R, use_garch=use_garch_local)
             method = "univariate" + (" + GARCH" if use_garch_local else "")

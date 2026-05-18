@@ -351,24 +351,9 @@ plt.close()
 # ---------------------------------------------------------------------------
 # K-Means clustering on (volatility, excess kurtosis)
 # ---------------------------------------------------------------------------
-# --- DISCREPANCY NOTE (please confirm with the group member who ran K-Means) ---
-# The LaTeX report says K-Means runs on the standardised (volatility, kurtosis)
-# feature pair. With only those two features, guitars always groups with
-# slingshots and sugar (their (vol, kurt) coordinates are nearly identical).
-# To reproduce the cluster assignment shown in the published figure --
-# guitars in the same cluster as gurkor and water -- K-Means has to use all
-# four standardised moments (mean, std, skew, excess kurtosis). The scatter
-# plot still uses (std, kurtosis) as visible axes.
-# Either the original K-Means used four features and the report text is
-# slightly off, or the original used (vol, kurt) with a specific seed/setup
-# that isn't preserved in the repo. The four-moment version below is the
-# one that matches the figure exactly.
-# ------------------------------------------------------------------------------
-mean_r = log_ret.mean().reindex(ASSETS).values
 vol = log_ret.std().reindex(ASSETS).values
-skew = log_ret.apply(lambda s: stats.skew(s.dropna())).reindex(ASSETS).values
 kur = log_ret.apply(lambda s: stats.kurtosis(s.dropna())).reindex(ASSETS).values
-feat = np.column_stack([mean_r, vol, skew, kur])
+feat = np.column_stack([vol, kur])
 scaler = StandardScaler()
 feat_s = scaler.fit_transform(feat)
 km = KMeans(n_clusters=3, n_init=10, random_state=0).fit(feat_s)
